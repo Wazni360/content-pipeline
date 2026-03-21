@@ -27,7 +27,7 @@ function toSrtTimestamp(seconds) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
 }
 
-// Step 2 — Generates an SRT caption file from the cleaned script distributed across the voiceover duration
+// Step 2 — Generates an SRT caption file timed proportionally by word count per sentence
 function buildSrt(scriptText, totalDuration) {
   const cleaned = cleanScript(scriptText);
   const sentences = cleaned
@@ -35,13 +35,19 @@ function buildSrt(scriptText, totalDuration) {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const timePerSentence = totalDuration / sentences.length;
+  const totalWordCount = sentences.reduce((sum, s) => sum + s.split(/\s+/).length, 0);
+  const secondsPerWord = totalDuration / totalWordCount;
+
   let srt = "";
+  let currentTime = 0;
 
   sentences.forEach((sentence, i) => {
-    const start = i * timePerSentence;
-    const end = start + timePerSentence - 0.1;
+    const wordCount = sentence.split(/\s+/).length;
+    const sentenceDuration = wordCount * secondsPerWord;
+    const start = currentTime;
+    const end = currentTime + sentenceDuration;
     srt += `${i + 1}\n${toSrtTimestamp(start)} --> ${toSrtTimestamp(end)}\n${sentence}\n\n`;
+    currentTime = end;
   });
 
   return srt;
