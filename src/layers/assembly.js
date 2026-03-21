@@ -8,7 +8,7 @@ import { cleanScript } from "../utils/cleanScript.js";
 
 ffmpeg.setFfprobePath(ffprobeStatic.path);
 
-// Step 1 — Returns the duration in seconds of an audio/video file using ffprobe
+// Returns the duration in seconds of an audio/video file using ffprobe
 function getAudioDuration(filePath) {
   return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -18,7 +18,7 @@ function getAudioDuration(filePath) {
   });
 }
 
-// Step 2 — Formats a number of seconds as an SRT timestamp string (HH:MM:SS,mmm)
+// Formats a number of seconds as an SRT timestamp string (HH:MM:SS,mmm)
 function toSrtTimestamp(seconds) {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -27,7 +27,7 @@ function toSrtTimestamp(seconds) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
 }
 
-// Step 2 — Generates an SRT caption file timed proportionally by word count per sentence
+// Generates an SRT caption file timed proportionally by word count per sentence
 function buildSrt(scriptText, totalDuration) {
   const cleaned = cleanScript(scriptText);
   const sentences = cleaned
@@ -53,29 +53,42 @@ function buildSrt(scriptText, totalDuration) {
   return srt;
 }
 
-// Step 3 — Wraps fluent-ffmpeg concat+overlay+subtitle encoding in a Promise
-function assembleVideo(clipPaths, voiceoverPath, captionsPath, outputPath, totalDuration) {
-  return new Promise((resolve, reject) => {
-    const clipCount = clipPaths.length;
-    const clipDuration = totalDuration / clipCount;
+// Calculates each segment's duration proportional to its word count vs total voiceover duration
+function calcSegmentDurations(segments, scriptText, totalDuration) {
+  const cleaned = cleanScript(scriptText);
+  const totalWords = cleaned.split(/\s+/).filter(Boolean).length;
+  const secondsPerWord = totalDuration / totalWords;
 
-    // Build a filter_complex that trims, scales, and crops each clip, then concatenates them
+  return segments.map((seg) => {
+    const words = cleanScript(seg.text ?? seg.section).split(/\s+/).filter(Boolean).length;
+    return { ...seg, duration: Math.max(words * secondsPerWord, 1) };
+  });
+}
+
+// Wraps fluent-ffmpeg concat+overlay+subtitle encoding in a Promise
+// Each clip is trimmed to its segment's calculated duration before concatenation
+function assembleVideo(segments, voiceoverPath, captionsPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const clipCount = segments.length;
+
+    // Build filter_complex: trim each clip to its segment duration, scale/crop, normalize fps
     let filterComplex = "";
     const concatInputs = [];
 
-    clipPaths.forEach((_, i) => {
-      filterComplex += `[${i}:v]trim=duration=${clipDuration},setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30[v${i}];`;
+    segments.forEach((seg, i) => {
+      filterComplex +=
+        `[${i}:v]trim=duration=${seg.duration.toFixed(3)},setpts=PTS-STARTPTS,` +
+        `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30[v${i}];`;
       concatInputs.push(`[v${i}]`);
     });
 
     filterComplex += `${concatInputs.join("")}concat=n=${clipCount}:v=1:a=0[vconcat];`;
     filterComplex += `[vconcat]subtitles='${captionsPath.replace(/'/g, "\\'")}':force_style='FontSize=18,Alignment=2'[vout]`;
 
-    // Index of the voiceover input (after all clips)
     const audioInputIndex = clipCount;
 
     let cmd = ffmpeg();
-    clipPaths.forEach((p) => cmd.input(p));
+    segments.forEach((seg) => cmd.input(seg.clip));
     cmd
       .input(voiceoverPath)
       .complexFilter(filterComplex)
@@ -97,8 +110,8 @@ function assembleVideo(clipPaths, voiceoverPath, captionsPath, outputPath, total
   });
 }
 
-// Assembles all clips, voiceover, and captions into a final vertical video
-export async function runAssemblyLayer(job, voiceoverPath, clipPaths, scriptText) {
+// Assembles all clips (one per script section), voiceover, and captions into a final vertical video
+export async function runAssemblyLayer(job, voiceoverPath, clipPaths, scriptText, segments) {
   const outputDir = jobOutputDir(job.id);
   await fsExtra.ensureDir(outputDir);
 
@@ -123,17 +136,25 @@ export async function runAssemblyLayer(job, voiceoverPath, clipPaths, scriptText
     throw err;
   }
 
-  // Step 3 — Assemble final video with FFmpeg
+  // Step 3 — Calculate per-segment durations and assemble
+  // Fall back to equal-split if no segments metadata was provided
+  const activeSegments = segments && segments.length > 0
+    ? calcSegmentDurations(segments, scriptText, duration)
+    : clipPaths.map((clip) => ({ clip, section: "clip", duration: duration / clipPaths.length }));
+
+  logger.info(
+    `Segment durations: ${activeSegments.map((s) => `${s.section}=${s.duration.toFixed(1)}s`).join(", ")}`
+  );
+
   const finalPath = path.join(outputDir, "final_video.mp4");
   try {
     logger.info("Starting video assembly...");
-    await assembleVideo(clipPaths, voiceoverPath, captionsPath, finalPath, duration);
+    await assembleVideo(activeSegments, voiceoverPath, captionsPath, finalPath);
     logger.info(`Final video saved: ${finalPath}`);
   } catch (err) {
     logger.error("FFmpeg assembly failed", err.message);
     throw err;
   }
 
-  // Step 4 — Return path to final video
   return finalPath;
 }

@@ -11,30 +11,85 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions";
 const MODEL = process.env.LM_STUDIO_MODEL;
 
-// Asks LM Studio to extract 4 single-word visual search keywords from the script
-async function extractKeywords(scriptText) {
+// Asks LM Studio to extract a single-word visual keyword from the given text snippet
+async function extractKeyword(text) {
   const response = await axios.post(LM_STUDIO_URL, {
     model: MODEL,
     messages: [
       {
         role: "system",
         content:
-          'You are a keyword extractor. Extract 4 single-word visual search terms from the given script. Respond with ONLY a JSON array of strings. No explanation, no preamble, no markdown. Example: ["focus","goals","mindset","success"]',
+          'You are a keyword extractor. Extract exactly 1 single-word visual search term from the given text. Respond with ONLY a JSON array containing one string. No explanation, no preamble, no markdown. Example: ["focus"]',
       },
       {
         role: "user",
-        content: `Extract 4 visual keywords from this script: ${scriptText}`,
+        content: `Extract 1 visual keyword from this text: ${text}`,
       },
     ],
     temperature: 0.3,
-    max_tokens: 50,
+    max_tokens: 20,
   });
 
   const raw = response.data.choices[0].message.content.trim();
-  return JSON.parse(raw);
+  const parsed = JSON.parse(raw);
+  return parsed[0];
 }
 
-// Searches Pexels for a portrait HD video clip matching the keyword and returns its download URL
+// Parses the raw script into { hook, bullets, cta } sections
+// Detects bullet points in BODY as lines starting with 1./2./3. or - or •
+function parseScriptSections(scriptText) {
+  const lines = scriptText.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  let hook = "";
+  let cta = "";
+  const bullets = [];
+
+  let section = null;
+  let bodyLines = [];
+
+  for (const line of lines) {
+    if (/\*?\*?HOOK:\*?\*?/i.test(line)) {
+      section = "hook";
+      const rest = line.replace(/\*?\*?HOOK:\*?\*?/i, "").trim();
+      if (rest) hook += " " + rest;
+    } else if (/\*?\*?BODY:\*?\*?/i.test(line)) {
+      section = "body";
+      const rest = line.replace(/\*?\*?BODY:\*?\*?/i, "").trim();
+      if (rest) bodyLines.push(rest);
+    } else if (/\*?\*?CTA:\*?\*?/i.test(line)) {
+      section = "cta";
+      const rest = line.replace(/\*?\*?CTA:\*?\*?/i, "").trim();
+      if (rest) cta += " " + rest;
+    } else {
+      if (section === "hook") hook += " " + line;
+      else if (section === "body") bodyLines.push(line);
+      else if (section === "cta") cta += " " + line;
+    }
+  }
+
+  // Detect bullet lines in body: lines starting with `1.` / `2.` / `-` / `•` / `*`
+  const bulletPattern = /^(\d+\.|[-•*])\s+/;
+  const hasBullets = bodyLines.some((l) => bulletPattern.test(l));
+
+  if (hasBullets) {
+    for (const line of bodyLines) {
+      if (bulletPattern.test(line)) {
+        bullets.push(line.replace(bulletPattern, "").trim());
+      }
+    }
+  } else {
+    // No bullets — treat entire body as one segment
+    bullets.push(bodyLines.join(" ").trim());
+  }
+
+  return {
+    hook: hook.trim(),
+    bullets,
+    cta: cta.trim(),
+  };
+}
+
+// Searches Pexels for a portrait clip matching the keyword; returns its download URL or null
 async function findClipUrl(keyword) {
   const response = await axios.get("https://api.pexels.com/videos/search", {
     headers: { Authorization: process.env.PEXELS_API_KEY },
@@ -58,41 +113,58 @@ async function downloadClip(url, outputPath) {
   await fsExtra.writeFile(outputPath, Buffer.from(response.data));
 }
 
-// Extracts visual keywords from the script, searches Pexels for matching clips, and downloads them
-export async function runVisualsLayer(job, scriptText) {
-  // Step 1 — Extract keywords via LM Studio
-  let keywords;
+// Downloads a single clip for a given section label and text; returns a segment object or null
+async function fetchSegment(label, text, outputPath) {
+  let keyword;
   try {
-    keywords = await extractKeywords(scriptText);
-    logger.info(`Extracted visual keywords: ${JSON.stringify(keywords)}`);
+    keyword = await extractKeyword(text);
+    logger.info(`Keyword for ${label}: "${keyword}"`);
   } catch (err) {
-    logger.error("Keyword extraction failed", err.message);
-    throw err;
+    logger.error(`Keyword extraction failed for ${label}`, err.message);
+    return null;
   }
 
+  try {
+    const clipUrl = await findClipUrl(keyword);
+    if (!clipUrl) {
+      logger.info(`[warn] No suitable vertical clip found for keyword: ${keyword} (${label}), skipping`);
+      return null;
+    }
+    await downloadClip(clipUrl, outputPath);
+    logger.info(`Downloaded ${path.basename(outputPath)} for ${label} ("${keyword}")`);
+    return { clip: outputPath, section: label };
+  } catch (err) {
+    logger.error(`Failed to fetch clip for ${label}`, err.message);
+    return null;
+  }
+}
+
+// Extracts script sections, fetches one clip per section, and returns segments with clip paths
+export async function runVisualsLayer(job, scriptText) {
   const outputDir = jobOutputDir(job.id);
   await fsExtra.ensureDir(outputDir);
 
-  // Step 2 — Search Pexels and download one clip per keyword
-  const clipPaths = [];
-  for (let i = 0; i < keywords.length; i++) {
-    const keyword = keywords[i];
-    try {
-      const clipUrl = await findClipUrl(keyword);
-      if (!clipUrl) {
-        logger.info(`[warn] No suitable vertical clip found for keyword: ${keyword}, skipping`);
-        continue;
-      }
+  // Parse the script into hook, bullet points, and CTA
+  const { hook, bullets, cta } = parseScriptSections(scriptText);
+  logger.info(`Script sections — hook: 1, bullets: ${bullets.length}, cta: 1`);
 
-      const outputPath = path.join(outputDir, `clip_${i}.mp4`);
-      await downloadClip(clipUrl, outputPath);
-      clipPaths.push(outputPath);
-      logger.info(`Downloaded clip_${i}.mp4 for keyword "${keyword}"`);
-    } catch (err) {
-      logger.error(`Failed to fetch clip for keyword "${keyword}"`, err.message);
-    }
+  // Build a list of { label, text, filename } entries in playback order
+  const sections = [
+    { label: "hook", text: hook },
+    ...bullets.map((text, i) => ({ label: `bullet_${i + 1}`, text })),
+    { label: "cta", text: cta },
+  ];
+
+  // Fetch one clip per section sequentially to avoid hammering the APIs
+  const segments = [];
+  for (let i = 0; i < sections.length; i++) {
+    const { label, text } = sections[i];
+    const outputPath = path.join(outputDir, `clip_${i}_${label}.mp4`);
+    const segment = await fetchSegment(label, text, outputPath);
+    if (segment) segments.push(segment);
   }
 
-  // Step 3 — Return all downloaded clip paths
-  return clipPaths;
+  // Return clip paths array (for backward compat) and segments for assembly
+  const clipPaths = segments.map((s) => s.clip);
+  return { clipPaths, segments };
 }

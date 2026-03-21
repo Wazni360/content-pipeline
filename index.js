@@ -11,11 +11,11 @@ const scriptText = await runScriptGenLayer(job);
 console.log("Script generation complete");
 
 console.log("Voiceover and visuals generating in parallel...");
-const [voiceoverPath, clipPaths] = await Promise.all([
+const [voiceoverPath, { clipPaths, segments }] = await Promise.all([
   runVoiceoverLayer(job, scriptText),
   runVisualsLayer(job, scriptText),
 ]);
 console.log("Both complete");
 
-const finalVideoPath = await runAssemblyLayer(job, voiceoverPath, clipPaths, scriptText);
+const finalVideoPath = await runAssemblyLayer(job, voiceoverPath, clipPaths, scriptText, segments);
 console.log("Assembly complete", finalVideoPath);
