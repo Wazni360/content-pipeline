@@ -44,8 +44,12 @@ async function findClipUrl(keyword) {
   const video = response.data.videos?.[0];
   if (!video) return null;
 
-  const hdFile = video.video_files.find((f) => f.quality === "hd") ?? video.video_files[0];
-  return hdFile?.link ?? null;
+  const files = video.video_files;
+  const file =
+    files.find((f) => f.width === 1080 && f.height === 1920) ??
+    files.find((f) => f.width === 720 && f.height === 1280) ??
+    null;
+  return file?.link ?? null;
 }
 
 // Downloads a video from a URL and saves it as a .mp4 file at the given output path
@@ -76,7 +80,7 @@ export async function runVisualsLayer(job, scriptText) {
     try {
       const clipUrl = await findClipUrl(keyword);
       if (!clipUrl) {
-        logger.info(`No results for keyword "${keyword}", skipping`);
+        logger.info(`[warn] No suitable vertical clip found for keyword: ${keyword}, skipping`);
         continue;
       }
 
