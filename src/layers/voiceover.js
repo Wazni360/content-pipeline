@@ -1,12 +1,19 @@
 import axios from "axios";
 import fsExtra from "fs-extra";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { jobOutputDir } from "../utils/jobTracker.js";
 import { logger } from "../utils/logger.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Strips section labels and markdown bold syntax from the script, leaving only speakable text
+function cleanScript(text) {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/\*?\*?(HOOK|BODY|CTA):\*?\*?/i, "").replace(/\*\*/g, ""))
+    .filter((line) => line.trim() !== "")
+    .join("\n")
+    .trim();
+}
 
 // Calls ElevenLabs TTS API with the script text and saves the audio to disk
 export async function runVoiceoverLayer(job, scriptText) {
@@ -14,13 +21,17 @@ export async function runVoiceoverLayer(job, scriptText) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
 
+  // Clean the script before sending — removes labels and markdown formatting
+  const cleanedScript = cleanScript(scriptText);
+  logger.info(`Cleaned script for voiceover:\n${cleanedScript}`);
+
   // Send the TTS request, expecting raw audio bytes in response
   let audioData;
   try {
     const response = await axios.post(
       url,
       {
-        text: scriptText,
+        text: cleanedScript,
         model_id: "eleven_turbo_v2_5",
         voice_settings: {
           stability: 0.4,
