@@ -4,16 +4,7 @@ import path from "node:path";
 import "dotenv/config";
 import { jobOutputDir } from "../utils/jobTracker.js";
 import { logger } from "../utils/logger.js";
-
-// Strips section labels and markdown bold syntax from the script, leaving only speakable text
-function cleanScript(text) {
-  return text
-    .split("\n")
-    .map((line) => line.replace(/\*?\*?(HOOK|BODY|CTA):\*?\*?/i, "").replace(/\*\*/g, ""))
-    .filter((line) => line.trim() !== "")
-    .join("\n")
-    .trim();
-}
+import { cleanScript } from "../utils/cleanScript.js";
 
 // Calls ElevenLabs TTS API with the script text and saves the audio to disk
 export async function runVoiceoverLayer(job, scriptText) {

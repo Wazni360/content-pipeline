@@ -2,23 +2,11 @@ import ffmpeg from "fluent-ffmpeg";
 import ffprobeStatic from "ffprobe-static";
 import fsExtra from "fs-extra";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { jobOutputDir } from "../utils/jobTracker.js";
 import { logger } from "../utils/logger.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { cleanScript } from "../utils/cleanScript.js";
 
 ffmpeg.setFfprobePath(ffprobeStatic.path);
-
-// Strips HOOK/BODY/CTA labels and markdown bold syntax from script text
-function cleanScript(text) {
-  return text
-    .split("\n")
-    .map((line) => line.replace(/\*?\*?(HOOK|BODY|CTA):\*?\*?/i, "").replace(/\*\*/g, ""))
-    .filter((line) => line.trim() !== "")
-    .join(" ")
-    .trim();
-}
 
 // Step 1 — Returns the duration in seconds of an audio/video file using ffprobe
 function getAudioDuration(filePath) {
