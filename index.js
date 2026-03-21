@@ -1,6 +1,4 @@
-import { runPipeline } from "./src/pipeline.js";
+import { runInputLayer } from "./src/layers/input.js";
 
-runPipeline().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+const job = await runInputLayer();
+console.log(job);

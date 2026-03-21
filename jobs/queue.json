@@ -1,8 +1,20 @@
 [
   {
     "id": "job_001",
-    "topic": "Example topic — replace with your pending topics",
+    "topic": "5 habits that quietly destroy your productivity",
+    "niche": "productivity",
+    "tone": "punchy and direct",
+    "platform": "tiktok",
     "status": "pending",
-    "createdAt": null
+    "createdAt": "2026-03-21T00:00:00.000Z"
+  },
+  {
+    "id": "job_002",
+    "topic": "Why most people never finish what they start",
+    "niche": "mindset",
+    "tone": "calm and insightful",
+    "platform": "youtube",
+    "status": "pending",
+    "createdAt": "2026-03-21T00:00:00.000Z"
   }
 ]
